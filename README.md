@@ -1,7 +1,7 @@
 # Claude Usage Monitor
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Claude Usage Monitor Screenshot" width="300">
+  <img src="docs/images/screenshot.png" alt="Claude Usage Monitor Screenshot" width="350">
 </p>
 
 Windows タスクバーで Claude.ai の使用状況をリアルタイム監視するアプリ。
