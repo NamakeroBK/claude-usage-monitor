@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using ClaudeUsageMonitor.Models;
+using static ClaudeUsageMonitor.Services.Logger;
 
 namespace ClaudeUsageMonitor.Services;
 
@@ -17,12 +18,19 @@ public class ClaudeApiClient : IDisposable
 
     public ClaudeApiClient()
     {
-        _httpClient = new HttpClient
+        var handler = new HttpClientHandler
         {
-            Timeout = TimeSpan.FromSeconds(10)
+            UseCookies = false // We manage cookies manually
+        };
+        _httpClient = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(15)
         };
         _httpClient.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/json"));
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+        _httpClient.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-US,en;q=0.9,ja;q=0.8");
     }
 
     public void SetCredentials(string sessionKey, string organizationId)
@@ -39,21 +47,32 @@ public class ClaudeApiClient : IDisposable
     public async Task<UsageData?> GetUsageAsync(CancellationToken cancellationToken = default)
     {
         if (!HasCredentials)
+        {
+            Log("API", "GetUsageAsync: No credentials");
             throw new InvalidOperationException("Credentials not set");
+        }
 
-        var request = CreateRequest($"/organizations/{_organizationId}/usage");
+        var endpoint = $"/organizations/{_organizationId}/usage";
+        Log("API", $"GetUsageAsync: {endpoint}");
+        var request = CreateRequest(endpoint);
         
         try
         {
             var response = await _httpClient.SendAsync(request, cancellationToken);
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            Log("API", $"GetUsageAsync response: {(int)response.StatusCode} - {json.Substring(0, Math.Min(200, json.Length))}");
+            
             response.EnsureSuccessStatusCode();
 
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
             var apiResponse = JsonSerializer.Deserialize<UsageApiResponse>(json);
 
             if (apiResponse?.FiveHour == null)
+            {
+                Log("API", "GetUsageAsync: No five_hour data in response");
                 return null;
+            }
 
+            Log("API", $"GetUsageAsync success: {apiResponse.FiveHour.Utilization}%");
             return new UsageData
             {
                 Utilization = apiResponse.FiveHour.Utilization,
@@ -63,6 +82,7 @@ public class ClaudeApiClient : IDisposable
         }
         catch (HttpRequestException ex)
         {
+            Log("API", $"GetUsageAsync error: {ex.Message}");
             throw new ClaudeApiException("Failed to fetch usage data", ex);
         }
     }
@@ -80,21 +100,29 @@ public class ClaudeApiClient : IDisposable
         try
         {
             var response = await _httpClient.SendAsync(request, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new ClaudeApiException($"API error {(int)response.StatusCode}: {json}");
+            }
+
             var apiResponse = JsonSerializer.Deserialize<List<OrganizationApiResponse>>(json);
 
             return apiResponse?.Select(o => new Organization
             {
                 Uuid = o.Uuid,
-                Name = o.Name,
+                Name = string.IsNullOrEmpty(o.Name) ? o.Uuid : o.Name,
                 RateLimitTier = o.RateLimitTier
             }).ToList() ?? new List<Organization>();
         }
         catch (HttpRequestException ex)
         {
-            throw new ClaudeApiException("Failed to fetch organizations", ex);
+            throw new ClaudeApiException($"Network error: {ex.Message}", ex);
+        }
+        catch (JsonException ex)
+        {
+            throw new ClaudeApiException($"Parse error: {ex.Message}", ex);
         }
     }
 
@@ -154,6 +182,14 @@ public class ClaudeApiClient : IDisposable
     {
         var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}{endpoint}");
         request.Headers.Add("Cookie", $"sessionKey={_sessionKey}");
+        request.Headers.Add("Origin", "https://claude.ai");
+        request.Headers.Add("Referer", "https://claude.ai/");
+        request.Headers.Add("Sec-Fetch-Dest", "empty");
+        request.Headers.Add("Sec-Fetch-Mode", "cors");
+        request.Headers.Add("Sec-Fetch-Site", "same-origin");
+        request.Headers.Add("Sec-Ch-Ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"");
+        request.Headers.Add("Sec-Ch-Ua-Mobile", "?0");
+        request.Headers.Add("Sec-Ch-Ua-Platform", "\"Windows\"");
         return request;
     }
 

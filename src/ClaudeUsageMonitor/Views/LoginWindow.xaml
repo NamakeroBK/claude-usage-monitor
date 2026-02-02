@@ -1,0 +1,53 @@
+<Window x:Class="ClaudeUsageMonitor.Views.LoginWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="Claude にログイン" 
+        Height="700" Width="500"
+        WindowStartupLocation="CenterScreen"
+        Background="#FF2D2D30">
+    
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Header -->
+        <Border Grid.Row="0" Background="#FF252526" Padding="12">
+            <StackPanel>
+                <TextBlock Text="Claude アカウントでログイン" 
+                           Foreground="White" 
+                           FontSize="14" 
+                           FontWeight="SemiBold"/>
+                <TextBlock Text="ログイン後、自動的にセッションキーを取得します" 
+                           Foreground="#FF808080" 
+                           FontSize="11"
+                           Margin="0,4,0,0"/>
+            </StackPanel>
+        </Border>
+        
+        <!-- WebView2 -->
+        <wv2:WebView2 x:Name="WebView" 
+                      Grid.Row="1"
+                      Source="https://claude.ai/login"/>
+        
+        <!-- Footer -->
+        <Border Grid.Row="2" Background="#FF252526" Padding="12">
+            <Grid>
+                <TextBlock x:Name="StatusText" 
+                           Text="ログインしてください..." 
+                           Foreground="#FF808080"
+                           VerticalAlignment="Center"/>
+                <Button Content="キャンセル" 
+                        Click="Cancel_Click"
+                        HorizontalAlignment="Right"
+                        Padding="16,6"
+                        Background="#FF3F3F46"
+                        Foreground="White"
+                        BorderThickness="0"/>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

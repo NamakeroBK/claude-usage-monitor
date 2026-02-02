@@ -11,7 +11,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ClaudeApiClient _apiClient;
     private readonly CredentialService _credentialService;
     private readonly PollingService _pollingService;
+    private readonly WebViewPollingService _webViewPolling;
 
+    // 5-hour session limit
     [ObservableProperty]
     private int _utilization;
 
@@ -24,14 +26,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _timeUntilResetText = "";
 
+    // 7-day weekly limit
     [ObservableProperty]
-    private string _lastUpdateText = "Never";
+    private int _weeklyUtilization;
 
     [ObservableProperty]
-    private string _planText = "Unknown";
+    private string _weeklyUtilizationText = "0%";
 
     [ObservableProperty]
-    private string _statusText = "Not connected";
+    private string _weeklyResetText = "";
+
+    // Sonnet limit
+    [ObservableProperty]
+    private int _sonnetUtilization;
+
+    [ObservableProperty]
+    private string _sonnetUtilizationText = "0%";
+
+    [ObservableProperty]
+    private string _lastUpdateText = "未取得";
+
+    [ObservableProperty]
+    private string _planText = "不明";
+
+    [ObservableProperty]
+    private string _statusText = "未接続";
 
     [ObservableProperty]
     private bool _isConnected;
@@ -44,9 +63,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _apiClient = new ClaudeApiClient();
         _credentialService = new CredentialService();
         _pollingService = new PollingService(_apiClient);
+        _webViewPolling = new WebViewPollingService(_credentialService);
 
-        _pollingService.UsageUpdated += OnUsageUpdated;
-        _pollingService.ErrorOccurred += OnErrorOccurred;
+        _webViewPolling.UsageUpdated += OnWebViewUsageUpdated;
+        _webViewPolling.StatusChanged += OnStatusChanged;
 
         // Load saved credentials
         LoadCredentials();
@@ -61,14 +81,129 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             _apiClient.SetCredentials(sessionKey, orgId);
             IsConnected = true;
-            StatusText = "Connected";
-            _pollingService.Start();
-            _ = LoadSubscriptionInfoAsync();
+            
+            // Load cached usage (includes plan info)
+            LoadCachedUsage();
+            
+            // Start background WebView2 polling (bypasses Cloudflare)
+            _ = _webViewPolling.StartAsync();
+            
+            StatusText = "接続済み";
         }
         else
         {
-            StatusText = "Not configured";
+            StatusText = "未設定 - 設定を開いてください";
         }
+    }
+
+    private void LoadCachedUsage()
+    {
+        try
+        {
+            var cachePath = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "ClaudeUsageMonitor", "usage_cache.json");
+            
+            if (!System.IO.File.Exists(cachePath)) return;
+            
+            var json = System.IO.File.ReadAllText(cachePath);
+            var cache = System.Text.Json.JsonDocument.Parse(json);
+            
+            var utilization = cache.RootElement.GetProperty("Utilization").GetInt32();
+            var fetchedAtStr = cache.RootElement.GetProperty("FetchedAt").GetString();
+            var fetchedAt = DateTime.Parse(fetchedAtStr ?? "");
+            
+            DateTime? resetsAt = null;
+            if (cache.RootElement.TryGetProperty("ResetsAt", out var resetsAtElem) && 
+                resetsAtElem.ValueKind != System.Text.Json.JsonValueKind.Null)
+            {
+                resetsAt = DateTime.Parse(resetsAtElem.GetString() ?? "");
+            }
+            
+            // Load plan info
+            if (cache.RootElement.TryGetProperty("BillingType", out var billingElem))
+            {
+                var billingType = billingElem.GetString() ?? "unknown";
+                var rateLimitTier = "";
+                if (cache.RootElement.TryGetProperty("RateLimitTier", out var tierElem))
+                {
+                    rateLimitTier = tierElem.GetString() ?? "";
+                }
+                PlanText = GetPlanDisplayName(billingType, rateLimitTier);
+            }
+            
+            // Update UI with cached data - 5-hour limit
+            Utilization = utilization;
+            UtilizationText = $"{utilization}%";
+            if (resetsAt.HasValue)
+            {
+                var remaining = resetsAt.Value - DateTime.UtcNow;
+                if (remaining.TotalMinutes > 0)
+                {
+                    var hours = (int)remaining.TotalHours;
+                    var mins = remaining.Minutes;
+                    TimeUntilResetText = hours > 0 ? $"{hours}時間{mins}分後" : $"{mins}分後";
+                    ResetTimeText = resetsAt.Value.ToLocalTime().ToString("HH:mm");
+                }
+                else
+                {
+                    TimeUntilResetText = "まもなく";
+                    ResetTimeText = "リセット中";
+                }
+            }
+            
+            // 7-day weekly limit
+            if (cache.RootElement.TryGetProperty("WeeklyUtilization", out var weeklyElem))
+            {
+                var weekly = weeklyElem.GetInt32();
+                WeeklyUtilization = weekly;
+                WeeklyUtilizationText = $"{weekly}%";
+                
+                if (cache.RootElement.TryGetProperty("WeeklyResetsAt", out var weeklyResetElem) &&
+                    weeklyResetElem.ValueKind != System.Text.Json.JsonValueKind.Null)
+                {
+                    var weeklyReset = DateTime.Parse(weeklyResetElem.GetString() ?? "");
+                    WeeklyResetText = weeklyReset.ToLocalTime().ToString("M/d HH:mm");
+                }
+            }
+            
+            // Sonnet limit
+            if (cache.RootElement.TryGetProperty("SonnetUtilization", out var sonnetElem))
+            {
+                var sonnet = sonnetElem.GetInt32();
+                SonnetUtilization = sonnet;
+                SonnetUtilizationText = $"{sonnet}%";
+            }
+            
+            LastUpdateText = $"{fetchedAt.ToLocalTime():HH:mm:ss}";
+            
+            // Determine level
+            CurrentLevel = utilization switch
+            {
+                >= 80 => UsageLevel.Critical,
+                >= 50 => UsageLevel.Moderate,
+                _ => UsageLevel.Safe
+            };
+            
+            Logger.Log("MainVM", $"Loaded cache: {utilization}%, plan={PlanText}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Log("MainVM", $"Failed to load cache: {ex.Message}");
+        }
+    }
+
+    private static string GetPlanDisplayName(string billingType, string rateLimitTier)
+    {
+        if (rateLimitTier.Contains("claude_max"))
+            return "Claude Max";
+        if (billingType == "stripe_subscription")
+            return "Pro";
+        if (billingType == "prepaid")
+            return "API (Prepaid)";
+        if (billingType == "free")
+            return "Free";
+        return billingType;
     }
 
     private async Task LoadSubscriptionInfoAsync()
@@ -83,7 +218,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch
         {
-            PlanText = "Unknown";
+            PlanText = "不明";
         }
     }
 
@@ -97,7 +232,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             TimeUntilResetText = $"in {data.TimeUntilResetFormatted}";
             LastUpdateText = DateTime.Now.ToString("HH:mm:ss");
             CurrentLevel = data.Level;
-            StatusText = "Connected";
+            StatusText = "接続中";
         });
     }
 
@@ -105,15 +240,65 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         Application.Current.Dispatcher.Invoke(() =>
         {
-            StatusText = $"Error: {ex.Message}";
+            StatusText = $"エラー: {ex.Message}";
+        });
+    }
+
+    private void OnWebViewUsageUpdated(object? sender, UsageDataFull data)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            // 5-hour session
+            Utilization = data.FiveHourUtilization;
+            UtilizationText = $"{data.FiveHourUtilization}%";
+            if (data.FiveHourResetsAt.HasValue)
+            {
+                var remaining = data.FiveHourResetsAt.Value - DateTime.UtcNow;
+                if (remaining.TotalMinutes > 0)
+                {
+                    var hours = (int)remaining.TotalHours;
+                    var mins = remaining.Minutes;
+                    TimeUntilResetText = hours > 0 ? $"{hours}時間{mins}分後" : $"{mins}分後";
+                    ResetTimeText = data.FiveHourResetsAt.Value.ToLocalTime().ToString("HH:mm");
+                }
+            }
+            CurrentLevel = data.FiveHourUtilization switch
+            {
+                >= 80 => UsageLevel.Critical,
+                >= 50 => UsageLevel.Moderate,
+                _ => UsageLevel.Safe
+            };
+
+            // Weekly
+            WeeklyUtilization = data.WeeklyUtilization;
+            WeeklyUtilizationText = $"{data.WeeklyUtilization}%";
+            if (data.WeeklyResetsAt.HasValue)
+            {
+                WeeklyResetText = data.WeeklyResetsAt.Value.ToLocalTime().ToString("M/d HH:mm");
+            }
+
+            // Sonnet
+            SonnetUtilization = data.SonnetUtilization;
+            SonnetUtilizationText = $"{data.SonnetUtilization}%";
+
+            LastUpdateText = DateTime.Now.ToString("HH:mm:ss");
+        });
+    }
+
+    private void OnStatusChanged(object? sender, string status)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            StatusText = status;
         });
     }
 
     [RelayCommand]
     private async Task RefreshAsync()
     {
-        StatusText = "Refreshing...";
-        await _pollingService.RefreshAsync();
+        // Trigger WebView2 polling (runs in background, no window)
+        StatusText = "更新中...";
+        await _webViewPolling.StartAsync();
     }
 
     [RelayCommand]
@@ -135,8 +320,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
-        _pollingService.UsageUpdated -= OnUsageUpdated;
-        _pollingService.ErrorOccurred -= OnErrorOccurred;
+        _webViewPolling.UsageUpdated -= OnWebViewUsageUpdated;
+        _webViewPolling.StatusChanged -= OnStatusChanged;
+        _webViewPolling.Dispose();
         _pollingService.Dispose();
         _apiClient.Dispose();
     }

@@ -2,3 +2,29 @@
 # Reference repos (for research)
 Claude-Usage-Extension/
 Claude-Usage-Tracker/
+
+# .NET build outputs
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+*.cache
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+
+# NuGet
+packages/
+*.nupkg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and local settings
+*.log
+debug.log
