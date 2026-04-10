@@ -11,7 +11,7 @@
         <helpers:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
         <helpers:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
         <!-- Colors -->
-        <Color x:Key="SafeColor">#4CAF50</Color>
+        <Color x:Key="SafeColor">#32D246</Color>
         <Color x:Key="ModerateColor">#FF9800</Color>
         <Color x:Key="CriticalColor">#F44336</Color>
         

@@ -1,6 +1,11 @@
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
+using System.Windows.Threading;
+using Microsoft.Win32;
 using Hardcodet.Wpf.TaskbarNotification;
 using ClaudeUsageMonitor.Services;
 using ClaudeUsageMonitor.ViewModels;
@@ -15,19 +20,21 @@ public partial class App : Application
     private MainViewModel? _viewModel;
     private int _lastNotifiedLevel = 0;
     private DateTime _lastResetTime = DateTime.MinValue;
+    private DispatcherTimer? _iconTimer;
+    private bool _showSession = true;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         Logger.Log("App", $"Starting... Log file: {Logger.GetLogPath()}");
-        
+
         // Prevent multiple instances
         const string mutexName = "ClaudeUsageMonitor_SingleInstance";
         _mutex = new Mutex(true, mutexName, out bool createdNew);
-        
+
         if (!createdNew)
         {
             Logger.Log("App", "Already running, exiting");
-            MessageBox.Show("Claude 使用量モニターは既に起動しています。\nタスクトレイを確認してください。", 
+            MessageBox.Show("Claude 使用量モニターは既に起動しています。\nタスクトレイを確認してください。",
                 "多重起動エラー", MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown();
             return;
@@ -35,12 +42,14 @@ public partial class App : Application
 
         base.OnStartup(e);
 
+        // 旧名の自動起動レジストリエントリ（スペースなし）を削除
+        CleanupLegacyStartupEntry();
+
         try
         {
             Logger.Log("App", "Creating ViewModel...");
             _viewModel = new MainViewModel();
-            
-            // Use system icon
+
             _trayIcon = new TaskbarIcon
             {
                 ToolTipText = "Claude 使用量モニター",
@@ -52,16 +61,25 @@ public partial class App : Application
             _viewModel.PropertyChanged += (s, args) =>
             {
                 if (args.PropertyName == nameof(MainViewModel.Utilization) ||
+                    args.PropertyName == nameof(MainViewModel.WeeklyUtilization) ||
                     args.PropertyName == nameof(MainViewModel.CurrentLevel))
                 {
                     UpdateTrayIcon();
                     CheckAndNotify();
                 }
             };
+
+            // 起動直後にキャッシュ値でアイコンを即時更新
+            UpdateTrayIcon();
+
+            // 3秒ごとにセッション%/週間%を交互表示
+            _iconTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            _iconTimer.Tick += (s, e) => { _showSession = !_showSession; UpdateTrayIcon(); };
+            _iconTimer.Start();
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"起動エラー: {ex.Message}\n\n{ex.StackTrace}", "Claude 使用量モニター", 
+            MessageBox.Show($"起動エラー: {ex.Message}\n\n{ex.StackTrace}", "Claude 使用量モニター",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown();
         }
@@ -71,16 +89,78 @@ public partial class App : Application
     {
         if (_trayIcon == null || _viewModel == null) return;
 
-        _trayIcon.ToolTipText = $"Claude 使用量: {_viewModel.Utilization}%";
-        
-        // Update icon based on level using system icons
-        _trayIcon.Icon = _viewModel.CurrentLevel switch
+        try
         {
-            Models.UsageLevel.Safe => SystemIcons.Information,      // Blue i
-            Models.UsageLevel.Moderate => SystemIcons.Warning,      // Yellow !
-            Models.UsageLevel.Critical => SystemIcons.Error,        // Red X
-            _ => SystemIcons.Information
-        };
+            var session = _viewModel.Utilization;
+            var weekly = _viewModel.WeeklyUtilization;
+            _trayIcon.ToolTipText = $"Claude 使用量\nセッション: {session}%\n週間: {weekly}%";
+
+            var pct = _showSession ? session : weekly;
+            var color = _showSession
+                ? _viewModel.CurrentLevel switch
+                {
+                    Models.UsageLevel.Critical => Color.FromArgb(244, 67, 54),    // #F44336
+                    Models.UsageLevel.Moderate => Color.FromArgb(255, 152, 0),   // #FF9800
+                    _ => Color.FromArgb(50, 210, 70)                             // 濃い緑・明るさ維持
+                }
+                : Color.FromArgb(40, 160, 245);                                  // #0078D4 明るめ
+
+            var newIcon = CreateSingleIcon(pct, color);
+            var oldIcon = _trayIcon.Icon;
+            _trayIcon.Icon = newIcon;
+            if (oldIcon != null && oldIcon != SystemIcons.Information &&
+                oldIcon != SystemIcons.Warning && oldIcon != SystemIcons.Error)
+            {
+                oldIcon.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("UpdateTrayIcon failed", ex);
+        }
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
+    private static Icon CreateSingleIcon(int pct, Color color)
+    {
+        const int W = 64;
+        const int H = 64;
+        using var bmp = new Bitmap(W, H, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        // SetResolution は Graphics.FromImage より前に呼ぶ
+        bmp.SetResolution(96, 96);
+        using var g = Graphics.FromImage(bmp);
+        g.Clear(Color.Transparent);
+        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.PageUnit = GraphicsUnit.Pixel;
+
+        using var brush = new SolidBrush(color);
+
+        // フォントサイズを数値が収まるよう動的に決定（余白なし最大化）
+        float fontSize = 64f;
+        Font? font = null;
+        SizeF textSize = SizeF.Empty;
+        do
+        {
+            font?.Dispose();
+            font = new Font("Arial", fontSize, System.Drawing.FontStyle.Bold, GraphicsUnit.Pixel);
+            textSize = g.MeasureString($"{pct}", font, PointF.Empty, StringFormat.GenericTypographic);
+            if (textSize.Width <= W && textSize.Height <= H) break;
+            fontSize -= 2f;
+        } while (fontSize > 8f);
+
+        float x = (W - textSize.Width) / 2f;
+        float y = (H - textSize.Height) / 2f;
+        g.DrawString($"{pct}", font!, brush, x, y, StringFormat.GenericTypographic);
+        font!.Dispose();
+
+        // Clone() でアイコンがリソースの所有権を持つようにし、元のGDIハンドルを解放
+        var hIcon = bmp.GetHicon();
+        var icon = (Icon)Icon.FromHandle(hIcon).Clone();
+        DestroyIcon(hIcon);
+        return icon;
     }
 
     private void CheckAndNotify()
@@ -92,7 +172,7 @@ public partial class App : Application
         // Notify at 80% (only once)
         if (utilization >= 80 && _lastNotifiedLevel < 80)
         {
-            ShowNotification("⚠️ 使用量 80%", 
+            ShowNotification("⚠️ 使用量 80%",
                 $"Claude の使用量が {utilization}% に達しました。\nペースを落とすことを検討してください。",
                 BalloonIcon.Warning);
             _lastNotifiedLevel = 80;
@@ -100,7 +180,7 @@ public partial class App : Application
         // Notify at 90% (only once)
         else if (utilization >= 90 && _lastNotifiedLevel < 90)
         {
-            ShowNotification("🚨 使用量 90%", 
+            ShowNotification("🚨 使用量 90%",
                 $"Claude の使用量が {utilization}% に達しました！\nまもなく制限に達します。",
                 BalloonIcon.Error);
             _lastNotifiedLevel = 90;
@@ -109,7 +189,7 @@ public partial class App : Application
         // Check for reset (utilization dropped significantly and time changed)
         if (_lastNotifiedLevel > 0 && utilization < 20)
         {
-            ShowNotification("🔄 リセット完了", 
+            ShowNotification("🔄 リセット完了",
                 "使用量がリセットされました。\n新しいセッションを開始できます。",
                 BalloonIcon.Info);
             _lastNotifiedLevel = 0;
@@ -121,10 +201,25 @@ public partial class App : Application
         _trayIcon?.ShowBalloonTip(title, message, icon);
     }
 
+    private static void CleanupLegacyStartupEntry()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true);
+            key?.DeleteValue("ClaudeUsageMonitor", false);
+        }
+        catch
+        {
+            // Ignore registry errors
+        }
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
         try
         {
+            _iconTimer?.Stop();
             _trayIcon?.Dispose();
             _viewModel?.Dispose();
             _mutex?.ReleaseMutex();

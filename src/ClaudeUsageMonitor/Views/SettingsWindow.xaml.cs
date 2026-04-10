@@ -12,7 +12,8 @@ public partial class SettingsWindow : Window
     private List<Organization> _organizations = new();
 
     private const string StartupRegistryKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
-    private const string AppName = "ClaudeUsageMonitor";
+    private const string AppName = "Claude Usage Monitor";
+    private const string LegacyAppName = "ClaudeUsageMonitor";
 
     public event Action? CredentialsSaved;
 
@@ -116,6 +117,7 @@ public partial class SettingsWindow : Window
             OrganizationComboBox.SelectedItem = org;
             
             // Cache usage and plan data from WebView2
+            var planType = DeterminePlanTypeFromTier(loginWindow.RateLimitTier);
             var usageCache = new
             {
                 Utilization = loginWindow.UsagePercent ?? 0,
@@ -125,6 +127,7 @@ public partial class SettingsWindow : Window
                 SonnetUtilization = loginWindow.SonnetUsagePercent ?? 0,
                 BillingType = loginWindow.BillingType ?? "unknown",
                 RateLimitTier = loginWindow.RateLimitTier ?? "unknown",
+                PlanType = planType,
                 FetchedAt = DateTime.UtcNow.ToString("o")
             };
             var cacheJson = System.Text.Json.JsonSerializer.Serialize(usageCache);
@@ -285,6 +288,20 @@ public partial class SettingsWindow : Window
         Close();
     }
 
+    private static string DeterminePlanTypeFromTier(string? rateLimitTier)
+    {
+        if (string.IsNullOrEmpty(rateLimitTier)) return "claude_pro";
+        return rateLimitTier switch
+        {
+            "max_20x" => "claude_max_20x",
+            "max_5x" => "claude_max_5x",
+            "team" => "claude_team",
+            "pro" => "claude_pro",
+            "free" => "free",
+            _ => "claude_pro"
+        };
+    }
+
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
         Close();
@@ -311,6 +328,9 @@ public partial class SettingsWindow : Window
         {
             using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryKey, true);
             if (key == null) return;
+
+            // 旧名エントリ（スペースなし）が残っていれば削除
+            key.DeleteValue(LegacyAppName, false);
 
             if (enabled)
             {

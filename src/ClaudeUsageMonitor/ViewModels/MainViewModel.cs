@@ -129,7 +129,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     rateLimitTier = tierElem.GetString() ?? "";
                 }
-                PlanText = GetPlanDisplayName(billingType, rateLimitTier);
+                var planType = "";
+                if (cache.RootElement.TryGetProperty("PlanType", out var planElem))
+                {
+                    planType = planElem.GetString() ?? "";
+                }
+                PlanText = GetPlanDisplayName(billingType, rateLimitTier, planType);
             }
             
             // Update UI with cached data - 5-hour limit
@@ -193,16 +198,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private static string GetPlanDisplayName(string billingType, string rateLimitTier)
+    private static string GetPlanDisplayName(string billingType, string rateLimitTier, string planType = "")
     {
-        if (rateLimitTier.Contains("20x")) return "Max 20x";
-        if (rateLimitTier.Contains("5x")) return "Max 5x";
-        if (rateLimitTier.Contains("claude_max")) return "Max";
-        if (billingType == "stripe_subscription")
+        if (rateLimitTier.Contains("20x") || planType == "claude_max_20x") return "Max 20x";
+        if (rateLimitTier.Contains("5x") || planType == "claude_max_5x") return "Max 5x";
+        if (rateLimitTier.Contains("claude_max") || planType.StartsWith("claude_max")) return "Max";
+        if (planType == "claude_team") return "Team";
+        if (billingType == "stripe_subscription" || planType == "claude_pro")
             return "Pro";
         if (billingType == "prepaid")
             return "API (Prepaid)";
-        if (billingType == "free")
+        if (billingType == "free" || planType == "free")
             return "Free";
         return billingType;
     }

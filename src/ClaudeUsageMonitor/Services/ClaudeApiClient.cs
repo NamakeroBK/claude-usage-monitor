@@ -15,6 +15,7 @@ public class ClaudeApiClient : IDisposable
     private readonly HttpClient _httpClient;
     private string? _sessionKey;
     private string? _organizationId;
+    private string? _rateLimitTier;
 
     public ClaudeApiClient()
     {
@@ -109,12 +110,19 @@ public class ClaudeApiClient : IDisposable
 
             var apiResponse = JsonSerializer.Deserialize<List<OrganizationApiResponse>>(json);
 
-            return apiResponse?.Select(o => new Organization
+            var orgs = apiResponse?.Select(o => new Organization
             {
                 Uuid = o.Uuid,
                 Name = string.IsNullOrEmpty(o.Name) ? o.Uuid : o.Name,
                 RateLimitTier = o.RateLimitTier
             }).ToList() ?? new List<Organization>();
+
+            // 現在の組織のRateLimitTierを保持
+            var currentOrg = orgs.FirstOrDefault(o => o.Uuid == _organizationId);
+            if (currentOrg != null)
+                _rateLimitTier = currentOrg.RateLimitTier;
+
+            return orgs;
         }
         catch (HttpRequestException ex)
         {
@@ -147,6 +155,7 @@ public class ClaudeApiClient : IDisposable
             return new SubscriptionInfo
             {
                 PlanType = apiResponse?.User?.Custom?.OrgType ?? "free",
+                RateLimitTier = _rateLimitTier,
                 IsRaven = apiResponse?.User?.Custom?.IsRaven ?? false
             };
         }
