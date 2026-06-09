@@ -181,8 +181,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Determine level
             CurrentLevel = utilization switch
             {
-                >= 80 => UsageLevel.Critical,
-                >= 50 => UsageLevel.Moderate,
+                >= 90 => UsageLevel.Critical,
+                >= 70 => UsageLevel.Moderate,
                 _ => UsageLevel.Safe
             };
             
@@ -266,8 +266,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             CurrentLevel = data.FiveHourUtilization switch
             {
-                >= 80 => UsageLevel.Critical,
-                >= 50 => UsageLevel.Moderate,
+                >= 90 => UsageLevel.Critical,
+                >= 70 => UsageLevel.Moderate,
                 _ => UsageLevel.Safe
             };
 
