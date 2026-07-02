@@ -36,12 +36,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _weeklyResetText = "";
 
-    // Sonnet limit
+    // Fable limit
     [ObservableProperty]
-    private int _sonnetUtilization;
+    private int _fableUtilization;
 
     [ObservableProperty]
-    private string _sonnetUtilizationText = "0%";
+    private string _fableUtilizationText = "0%";
 
     [ObservableProperty]
     private string _lastUpdateText = "未取得";
@@ -120,17 +120,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 resetsAt = DateTime.Parse(resetsAtElem.GetString() ?? "");
             }
             
-            // Load plan info - PlanType (from capabilities) takes precedence over RateLimitTier
-            if (cache.RootElement.TryGetProperty("PlanType", out var planTypeElem) &&
-                !string.IsNullOrEmpty(planTypeElem.GetString()))
+            // Load plan info - PlanType (from capabilities) takes precedence over RateLimitTier.
+            // ただし PlanType が "free"/空の場合は、claude.ai の capabilities 仕様変更で
+            // 階層が判定できていない可能性があるため、RateLimitTier を信頼してフォールバックする。
+            var rateLimitTier = cache.RootElement.TryGetProperty("RateLimitTier", out var rtElem)
+                ? rtElem.GetString() ?? "" : "";
+            var billingType = cache.RootElement.TryGetProperty("BillingType", out var billingElem)
+                ? billingElem.GetString() ?? "unknown" : "unknown";
+            var planType = cache.RootElement.TryGetProperty("PlanType", out var planTypeElem)
+                ? planTypeElem.GetString() ?? "" : "";
+
+            if (!string.IsNullOrEmpty(planType) && planType != "free")
             {
-                var info = new SubscriptionInfo { PlanType = planTypeElem.GetString()! };
-                PlanText = info.DisplayName;
+                PlanText = new SubscriptionInfo { PlanType = planType }.DisplayName;
             }
-            else if (cache.RootElement.TryGetProperty("BillingType", out var billingElem))
+            else
             {
-                var billingType = billingElem.GetString() ?? "unknown";
-                PlanText = billingType == "stripe_subscription" ? "Pro" : billingType;
+                // RateLimitTier から有料プランを判定（取れなければ PlanType/BillingType に戻る）
+                var fromTier = GetPlanDisplayName(billingType, rateLimitTier);
+                PlanText = fromTier == billingType && !string.IsNullOrEmpty(planType)
+                    ? new SubscriptionInfo { PlanType = planType }.DisplayName
+                    : fromTier;
             }
             
             // Update UI with cached data - 5-hour limit
@@ -168,12 +178,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
             }
             
-            // Sonnet limit
-            if (cache.RootElement.TryGetProperty("SonnetUtilization", out var sonnetElem))
+            // Fable limit
+            if (cache.RootElement.TryGetProperty("FableUtilization", out var fableElem))
             {
-                var sonnet = sonnetElem.GetInt32();
-                SonnetUtilization = sonnet;
-                SonnetUtilizationText = $"{sonnet}%";
+                var fable = fableElem.GetInt32();
+                FableUtilization = fable;
+                FableUtilizationText = $"{fable}%";
             }
             
             LastUpdateText = $"{fetchedAt.ToLocalTime():HH:mm:ss}";
@@ -279,9 +289,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 WeeklyResetText = data.WeeklyResetsAt.Value.ToLocalTime().ToString("M/d HH:mm");
             }
 
-            // Sonnet
-            SonnetUtilization = data.SonnetUtilization;
-            SonnetUtilizationText = $"{data.SonnetUtilization}%";
+            // Fable
+            FableUtilization = data.FableUtilization;
+            FableUtilizationText = $"{data.FableUtilization}%";
 
             LastUpdateText = DateTime.Now.ToString("HH:mm:ss");
         });

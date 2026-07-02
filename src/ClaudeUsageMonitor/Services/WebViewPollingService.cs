@@ -196,7 +196,7 @@ public class WebViewPollingService : IDisposable
                     SaveCache(usage);
                     UsageUpdated?.Invoke(this, usage);
                     StatusChanged?.Invoke(this, "接続済み");
-                    Logger.Log("WebViewPoll", $"Updated: 5h={usage.FiveHourUtilization}%, 7d={usage.WeeklyUtilization}%");
+                    Logger.Log("WebViewPoll", $"Updated: 5h={usage.FiveHourUtilization}%, 7d={usage.WeeklyUtilization}%, fable={usage.FableUtilization}%");
                 }
             }
         }
@@ -211,6 +211,39 @@ public class WebViewPollingService : IDisposable
         }
     }
 
+    // Fable(モデル別週間制限)の使用率を取得。
+    // 第一候補: limits配列の kind="weekly_scoped" エントリー(2026-07時点の形式)。
+    // フォールバック: 旧形式の seven_day_fable / seven_day_mythos キー。
+    private static int? FindFablePercent(System.Text.Json.JsonElement root)
+    {
+        if (root.TryGetProperty("limits", out var limits) &&
+            limits.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var entry in limits.EnumerateArray())
+            {
+                if (entry.TryGetProperty("kind", out var kind) &&
+                    kind.GetString() == "weekly_scoped" &&
+                    entry.TryGetProperty("percent", out var pct) &&
+                    pct.ValueKind == System.Text.Json.JsonValueKind.Number)
+                {
+                    return (int)pct.GetDouble();
+                }
+            }
+        }
+
+        foreach (var key in new[] { "seven_day_fable", "seven_day_mythos" })
+        {
+            if (root.TryGetProperty(key, out var el) &&
+                el.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                el.TryGetProperty("utilization", out var u) &&
+                u.ValueKind == System.Text.Json.JsonValueKind.Number)
+            {
+                return (int)u.GetDouble();
+            }
+        }
+        return null;
+    }
+
     private UsageDataFull? ParseUsage(string json)
     {
         try
@@ -219,7 +252,7 @@ public class WebViewPollingService : IDisposable
             var root = doc.RootElement;
             
             var usage = new UsageDataFull();
-            
+
             if (root.TryGetProperty("five_hour", out var fiveHour) && fiveHour.ValueKind != System.Text.Json.JsonValueKind.Null)
             {
                 usage.FiveHourUtilization = (int)fiveHour.GetProperty("utilization").GetDouble();
@@ -238,11 +271,12 @@ public class WebViewPollingService : IDisposable
                 }
             }
             
-            if (root.TryGetProperty("seven_day_sonnet", out var sonnet) && sonnet.ValueKind != System.Text.Json.JsonValueKind.Null)
+            var fablePercent = FindFablePercent(root);
+            if (fablePercent.HasValue)
             {
-                usage.SonnetUtilization = (int)sonnet.GetProperty("utilization").GetDouble();
+                usage.FableUtilization = fablePercent.Value;
             }
-            
+
             usage.FetchedAt = DateTime.UtcNow;
             return usage;
         }
@@ -287,7 +321,7 @@ public class WebViewPollingService : IDisposable
                 ResetsAt = usage.FiveHourResetsAt?.ToString("o"),
                 WeeklyUtilization = usage.WeeklyUtilization,
                 WeeklyResetsAt = usage.WeeklyResetsAt?.ToString("o"),
-                SonnetUtilization = usage.SonnetUtilization,
+                FableUtilization = usage.FableUtilization,
                 BillingType = billingType,
                 RateLimitTier = rateLimitTier,
                 PlanType = planType,
@@ -317,6 +351,6 @@ public class UsageDataFull
     public DateTime? FiveHourResetsAt { get; set; }
     public int WeeklyUtilization { get; set; }
     public DateTime? WeeklyResetsAt { get; set; }
-    public int SonnetUtilization { get; set; }
+    public int FableUtilization { get; set; }
     public DateTime FetchedAt { get; set; }
 }
