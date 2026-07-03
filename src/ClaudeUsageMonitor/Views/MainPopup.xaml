@@ -65,10 +65,11 @@
                 </StackPanel>
             </Border>
             
-            <!-- Fable Usage -->
-            <Border Background="#FF3F3F46" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+            <!-- モデル別週間制限 (Fable等 / APIが返さなくなったら非表示) -->
+            <Border Background="#FF3F3F46" CornerRadius="4" Padding="8" Margin="0,0,0,6"
+                    Visibility="{Binding FableVisibility}">
                 <StackPanel>
-                    <TextBlock Text="📖 Fable制限 (週間)" Foreground="#FFB0B0B0" FontSize="11"/>
+                    <TextBlock Text="{Binding FableLabel}" Foreground="#FFB0B0B0" FontSize="11"/>
                     <Grid Margin="0,4,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>

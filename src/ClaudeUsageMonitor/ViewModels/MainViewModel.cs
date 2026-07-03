@@ -36,12 +36,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _weeklyResetText = "";
 
-    // Fable limit
+    // モデル別週間制限 (Fable等)。APIが返さなくなったら行ごと非表示にする
     [ObservableProperty]
     private int _fableUtilization;
 
     [ObservableProperty]
     private string _fableUtilizationText = "0%";
+
+    [ObservableProperty]
+    private string _fableLabel = "📖 Fable制限 (週間)";
+
+    [ObservableProperty]
+    private Visibility _fableVisibility = Visibility.Collapsed;
 
     [ObservableProperty]
     private string _lastUpdateText = "未取得";
@@ -178,12 +184,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
             }
             
-            // Fable limit
-            if (cache.RootElement.TryGetProperty("FableUtilization", out var fableElem))
+            // モデル別週間制限 (キャッシュにnullが入っている場合は従量課金移行後とみなし非表示)
+            if (cache.RootElement.TryGetProperty("FableUtilization", out var fableElem) &&
+                fableElem.ValueKind == System.Text.Json.JsonValueKind.Number)
             {
                 var fable = fableElem.GetInt32();
                 FableUtilization = fable;
                 FableUtilizationText = $"{fable}%";
+                if (cache.RootElement.TryGetProperty("FableLabel", out var labelElem) &&
+                    labelElem.ValueKind == System.Text.Json.JsonValueKind.String &&
+                    !string.IsNullOrEmpty(labelElem.GetString()))
+                {
+                    FableLabel = $"📖 {labelElem.GetString()}制限 (週間)";
+                }
+                FableVisibility = Visibility.Visible;
+            }
+            else
+            {
+                FableVisibility = Visibility.Collapsed;
             }
             
             LastUpdateText = $"{fetchedAt.ToLocalTime():HH:mm:ss}";
@@ -289,9 +307,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 WeeklyResetText = data.WeeklyResetsAt.Value.ToLocalTime().ToString("M/d HH:mm");
             }
 
-            // Fable
-            FableUtilization = data.FableUtilization;
-            FableUtilizationText = $"{data.FableUtilization}%";
+            // モデル別週間制限 (APIから消えたら非表示)
+            if (data.FableUtilization.HasValue)
+            {
+                FableUtilization = data.FableUtilization.Value;
+                FableUtilizationText = $"{data.FableUtilization.Value}%";
+                if (!string.IsNullOrEmpty(data.FableLabel))
+                {
+                    FableLabel = $"📖 {data.FableLabel}制限 (週間)";
+                }
+                FableVisibility = Visibility.Visible;
+            }
+            else
+            {
+                FableVisibility = Visibility.Collapsed;
+            }
 
             LastUpdateText = DateTime.Now.ToString("HH:mm:ss");
         });

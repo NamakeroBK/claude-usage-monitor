@@ -123,7 +123,8 @@ public partial class SettingsWindow : Window
                 ResetsAt = loginWindow.UsageResetsAt?.ToString("o"),
                 WeeklyUtilization = loginWindow.WeeklyUsagePercent ?? 0,
                 WeeklyResetsAt = loginWindow.WeeklyResetsAt?.ToString("o"),
-                FableUtilization = loginWindow.FableUsagePercent ?? 0,
+                // nullのまま保存 → 従量課金移行後の再ログインで0%の死にゲージを出さない
+                FableUtilization = loginWindow.FableUsagePercent,
                 BillingType = loginWindow.BillingType ?? "unknown",
                 RateLimitTier = loginWindow.RateLimitTier ?? "unknown",
                 PlanType = planType,

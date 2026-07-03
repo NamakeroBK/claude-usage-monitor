@@ -196,7 +196,7 @@ public class WebViewPollingService : IDisposable
                     SaveCache(usage);
                     UsageUpdated?.Invoke(this, usage);
                     StatusChanged?.Invoke(this, "接続済み");
-                    Logger.Log("WebViewPoll", $"Updated: 5h={usage.FiveHourUtilization}%, 7d={usage.WeeklyUtilization}%, fable={usage.FableUtilization}%");
+                    Logger.Log("WebViewPoll", $"Updated: 5h={usage.FiveHourUtilization}%, 7d={usage.WeeklyUtilization}%, scoped={(usage.FableUtilization.HasValue ? $"{usage.FableLabel}:{usage.FableUtilization}%" : "なし")}");
                 }
             }
         }
@@ -211,10 +211,12 @@ public class WebViewPollingService : IDisposable
         }
     }
 
-    // Fable(モデル別週間制限)の使用率を取得。
-    // 第一候補: limits配列の kind="weekly_scoped" エントリー(2026-07時点の形式)。
+    // モデル別週間制限(weekly_scoped)の使用率とモデル名を取得。
+    // 第一候補: limits配列の kind="weekly_scoped" エントリー(2026-07時点の形式)。ラベルは scope.model.display_name。
     // フォールバック: 旧形式の seven_day_fable / seven_day_mythos キー。
-    private static int? FindFablePercent(System.Text.Json.JsonElement root)
+    // 2026-07-08以降はFableが従量課金(usage credits)に移行し、エントリー自体が消える想定。
+    // その場合はnullを返し、UI側はゲージ行ごと非表示にする。
+    private static (string? Label, int Percent)? FindScopedWeeklyLimit(System.Text.Json.JsonElement root)
     {
         if (root.TryGetProperty("limits", out var limits) &&
             limits.ValueKind == System.Text.Json.JsonValueKind.Array)
@@ -226,9 +228,20 @@ public class WebViewPollingService : IDisposable
                     entry.TryGetProperty("percent", out var pct) &&
                     pct.ValueKind == System.Text.Json.JsonValueKind.Number)
                 {
-                    return (int)pct.GetDouble();
+                    string? label = null;
+                    if (entry.TryGetProperty("scope", out var scope) &&
+                        scope.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                        scope.TryGetProperty("model", out var model) &&
+                        model.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                        model.TryGetProperty("display_name", out var dn) &&
+                        dn.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        label = dn.GetString();
+                    }
+                    return (label, (int)pct.GetDouble());
                 }
             }
+            return null;
         }
 
         foreach (var key in new[] { "seven_day_fable", "seven_day_mythos" })
@@ -238,7 +251,7 @@ public class WebViewPollingService : IDisposable
                 el.TryGetProperty("utilization", out var u) &&
                 u.ValueKind == System.Text.Json.JsonValueKind.Number)
             {
-                return (int)u.GetDouble();
+                return (key == "seven_day_mythos" ? "Mythos" : "Fable", (int)u.GetDouble());
             }
         }
         return null;
@@ -271,10 +284,17 @@ public class WebViewPollingService : IDisposable
                 }
             }
             
-            var fablePercent = FindFablePercent(root);
-            if (fablePercent.HasValue)
+            // 7/8の従量課金移行後にlimits配列へ新形式(credits等)が来た場合に備え、生JSONを毎回記録する
+            if (root.TryGetProperty("limits", out var limitsRaw))
             {
-                usage.FableUtilization = fablePercent.Value;
+                Logger.Log("WebViewPoll", $"limits raw: {limitsRaw.GetRawText()}");
+            }
+
+            var scoped = FindScopedWeeklyLimit(root);
+            if (scoped.HasValue)
+            {
+                usage.FableUtilization = scoped.Value.Percent;
+                usage.FableLabel = scoped.Value.Label ?? "Fable";
             }
 
             usage.FetchedAt = DateTime.UtcNow;
@@ -322,6 +342,7 @@ public class WebViewPollingService : IDisposable
                 WeeklyUtilization = usage.WeeklyUtilization,
                 WeeklyResetsAt = usage.WeeklyResetsAt?.ToString("o"),
                 FableUtilization = usage.FableUtilization,
+                FableLabel = usage.FableLabel,
                 BillingType = billingType,
                 RateLimitTier = rateLimitTier,
                 PlanType = planType,
@@ -351,6 +372,8 @@ public class UsageDataFull
     public DateTime? FiveHourResetsAt { get; set; }
     public int WeeklyUtilization { get; set; }
     public DateTime? WeeklyResetsAt { get; set; }
-    public int FableUtilization { get; set; }
+    // null = APIがモデル別週間制限を返していない(従量課金移行後など) → ゲージ非表示
+    public int? FableUtilization { get; set; }
+    public string? FableLabel { get; set; }
     public DateTime FetchedAt { get; set; }
 }
